@@ -118,6 +118,80 @@ function Ensure-NodeSpawnEnvironment {
     }
 }
 
+function Write-PatchedLazyCodexProcessRunner {
+    param([string]$ProcessFile)
+
+    $content = @'
+import { spawn } from "node:child_process";
+
+const WINDOWS_CMD_SHIM_COMMANDS = new Set(["npm", "npx"]);
+
+function resolveSpawnInvocation(command, args, platform = process.platform) {
+	const invocation = { command, args: Array.from(args) };
+	if (platform !== "win32") return invocation;
+	if (!WINDOWS_CMD_SHIM_COMMANDS.has(command.toLowerCase())) return invocation;
+	return {
+		command: "cmd.exe",
+		args: ["/d", "/s", "/c", `${command}.cmd`, ...invocation.args],
+	};
+}
+
+export async function defaultRunCommand(command, args, options) {
+	await new Promise((resolvePromise, reject) => {
+		const invocation = resolveSpawnInvocation(command, args);
+		const child = spawn(invocation.command, invocation.args, {
+			cwd: options.cwd,
+			stdio: "inherit",
+		});
+		child.once("error", reject);
+		child.once("exit", (code, signal) => {
+			if (code === 0) {
+				resolvePromise();
+				return;
+			}
+			const suffix = signal ? `signal ${signal}` : `exit code ${code}`;
+			reject(new Error(`${command} ${args.join(" ")} failed in ${options.cwd} with ${suffix}`));
+		});
+	});
+}
+'@
+
+    Set-Content -LiteralPath $ProcessFile -Value $content -Encoding UTF8
+}
+
+function Invoke-LazyCodexInstall {
+    param([string[]]$InstallerArgs)
+
+    $npmExecutable = Get-CommandPath "npm.cmd"
+    if ($null -eq $npmExecutable) {
+        Fail "npm.cmd is not available. Reinstall Node.js LTS from https://nodejs.org/"
+    }
+
+    $cacheRoot = Join-Path (Split-Path -Parent $PSScriptRoot) ".cache\lazycodex-ai"
+    New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+
+    Write-Step "Preparing patched LazyCodex installer"
+    & $npmExecutable install --prefix $cacheRoot lazycodex-ai@4.7.5 --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) {
+        Fail "npm install lazycodex-ai@4.7.5 failed with exit code $LASTEXITCODE."
+    }
+
+    $packageRoot = Join-Path $cacheRoot "node_modules\lazycodex-ai"
+    $entrypoint = Join-Path $packageRoot "packages\omo-codex\scripts\install-local.mjs"
+    $processFile = Join-Path $packageRoot "packages\omo-codex\scripts\install\process.mjs"
+    if (-not (Test-Path -LiteralPath $entrypoint)) {
+        Fail "LazyCodex installer entrypoint not found: $entrypoint"
+    }
+    if (-not (Test-Path -LiteralPath $processFile)) {
+        Fail "LazyCodex process runner not found: $processFile"
+    }
+
+    Write-PatchedLazyCodexProcessRunner $processFile
+    Write-Ok "Patched LazyCodex Windows npm runner"
+
+    & node $entrypoint @InstallerArgs
+}
+
 function Test-IsGitBash {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -234,17 +308,16 @@ $env:OMO_CODEX_GIT_BASH_PATH = $resolvedGitBash
 Write-Ok "Git Bash: $resolvedGitBash"
 
 Write-Step "Installing OMO/LazyCodex for Codex"
-$npxExecutable = Get-NpxExecutable
-$installArgs = @("lazycodex-ai", "install", "--no-tui")
+$installArgs = @("install", "--no-tui")
 if ($NoAutonomous) {
     $installArgs += "--no-codex-autonomous"
 } else {
     $installArgs += "--codex-autonomous"
 }
 
-& $npxExecutable @installArgs
+Invoke-LazyCodexInstall $installArgs
 if ($LASTEXITCODE -ne 0) {
-    Fail "npx lazycodex-ai install failed with exit code $LASTEXITCODE."
+    Fail "LazyCodex install failed with exit code $LASTEXITCODE."
 }
 
 Write-Step "Verifying installation"
