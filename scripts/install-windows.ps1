@@ -70,6 +70,54 @@ function Get-NpxExecutable {
     Fail "npx is not available. Install Node.js LTS from https://nodejs.org/"
 }
 
+function Add-DirectoryToProcessPath {
+    param([string]$Directory)
+    if ([string]::IsNullOrWhiteSpace($Directory)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Directory)) {
+        return
+    }
+
+    $parts = $env:Path -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    foreach ($part in $parts) {
+        if ($part.TrimEnd("\") -ieq $Directory.TrimEnd("\")) {
+            $env:PATH = $env:Path
+            return
+        }
+    }
+    $env:Path = "$Directory;$env:Path"
+    $env:PATH = $env:Path
+}
+
+function Ensure-NodeSpawnEnvironment {
+    $nodePath = Get-CommandPath "node.exe"
+    if ($null -ne $nodePath) {
+        Add-DirectoryToProcessPath (Split-Path -Parent $nodePath)
+    }
+
+    $npmCmd = Get-CommandPath "npm.cmd"
+    if ($null -ne $npmCmd) {
+        Add-DirectoryToProcessPath (Split-Path -Parent $npmCmd)
+    }
+
+    $npxCmd = Get-CommandPath "npx.cmd"
+    if ($null -ne $npxCmd) {
+        Add-DirectoryToProcessPath (Split-Path -Parent $npxCmd)
+    }
+
+    $npmGlobalPrefix = & npm.cmd config get prefix 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($npmGlobalPrefix)) {
+        Add-DirectoryToProcessPath $npmGlobalPrefix.Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:PATHEXT)) {
+        $env:PATHEXT = ".COM;.EXE;.BAT;.CMD"
+    } elseif ($env:PATHEXT -notmatch "(?i)(^|;)\.CMD(;|$)") {
+        $env:PATHEXT = "$env:PATHEXT;.CMD"
+    }
+}
+
 function Test-IsGitBash {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -138,6 +186,8 @@ Assert-Command "node" "Install Node.js LTS from https://nodejs.org/"
 Assert-Command "npm" "Install Node.js LTS from https://nodejs.org/"
 Assert-Command "npx" "Install Node.js LTS from https://nodejs.org/"
 Assert-Command "codex" "Install OpenAI Codex CLI first, then run this script again."
+Ensure-NodeSpawnEnvironment
+Write-Ok "Node/npm spawn environment prepared"
 
 Write-Step "Preparing Codex directories"
 $codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
