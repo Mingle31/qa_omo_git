@@ -56,6 +56,20 @@ function Assert-Command {
     Write-Ok "$Name found: $path"
 }
 
+function Get-NpxExecutable {
+    $cmdPath = Get-CommandPath "npx.cmd"
+    if ($null -ne $cmdPath) {
+        return $cmdPath
+    }
+
+    $npxPath = Get-CommandPath "npx"
+    if ($null -ne $npxPath) {
+        return $npxPath
+    }
+
+    Fail "npx is not available. Install Node.js LTS from https://nodejs.org/"
+}
+
 function Test-IsGitBash {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -170,6 +184,7 @@ $env:OMO_CODEX_GIT_BASH_PATH = $resolvedGitBash
 Write-Ok "Git Bash: $resolvedGitBash"
 
 Write-Step "Installing OMO/LazyCodex for Codex"
+$npxExecutable = Get-NpxExecutable
 $installArgs = @("lazycodex-ai", "install", "--no-tui")
 if ($NoAutonomous) {
     $installArgs += "--no-codex-autonomous"
@@ -177,7 +192,7 @@ if ($NoAutonomous) {
     $installArgs += "--codex-autonomous"
 }
 
-& npx @installArgs
+& $npxExecutable @installArgs
 if ($LASTEXITCODE -ne 0) {
     Fail "npx lazycodex-ai install failed with exit code $LASTEXITCODE."
 }
